@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+*.err
+*.out
+
+# Local dev process tracking
+.dev-server.pids
+
+# Generated card assets
+generated-cards/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
