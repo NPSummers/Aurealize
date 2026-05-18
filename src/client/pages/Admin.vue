@@ -139,14 +139,11 @@ onMounted(load);
     <header class="topbar">
       <div class="topbar-title">
         <img class="topbar-logo" :src="logoUrl" alt="Aurealize" />
-        <div>
-          <p class="eyebrow">Admin</p>
-          <h1>Card setup</h1>
-        </div>
+        <h1>Card setup</h1>
       </div>
       <div class="account">
-        <span>{{ email }}</span>
         <RouterLink class="secondary compact" to="/app">Dashboard</RouterLink>
+        <RouterLink class="secondary compact" to="/settings">Settings</RouterLink>
         <button class="secondary compact" @click="logout">Log out</button>
       </div>
     </header>

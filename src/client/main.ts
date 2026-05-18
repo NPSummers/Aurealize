@@ -11,7 +11,9 @@ const router = createRouter({
     { path: '/admin', component: () => import('./pages/Admin.vue') },
     { path: '/app', component: () => import('./pages/Dashboard.vue') },
     { path: '/claim', component: () => import('./pages/Claim.vue') },
+    { path: '/leaving', component: () => import('./pages/Leaving.vue') },
     { path: '/passkey-setup', component: () => import('./pages/PasskeySetup.vue') },
+    { path: '/settings', component: () => import('./pages/Settings.vue') },
     { path: '/verify', component: () => import('./pages/Verify.vue') }
   ]
 });

@@ -37,8 +37,22 @@ type Card = {
   owner_id: string | null;
   link_1_url: string | null;
   link_2_url: string | null;
+  link_1_kind?: 'custom' | 'connection' | null;
+  link_2_kind?: 'custom' | 'connection' | null;
+  link_1_connection_id?: string | null;
+  link_2_connection_id?: string | null;
   claim_code?: string | null;
   claimed_at: string | null;
+  created_at: string;
+};
+
+type Connection = {
+  id: string;
+  owner_id: string;
+  label: string;
+  provider: string;
+  url: string;
+  provider_account_id?: string | null;
   created_at: string;
 };
 
@@ -111,11 +125,68 @@ function base64UrlToBytes(value: string) {
 }
 
 function normalizeUrl(url: string) {
-  const parsed = new URL(url);
+  const input = url.trim();
+  if (input.startsWith('mailto:')) return input;
+  const parsed = new URL(/^[a-z][a-z0-9+.-]*:/i.test(input) ? input : `https://${input}`);
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('Only http and https links are allowed.');
   }
   return parsed.toString();
+}
+
+function normalizeCustomUrl(url: string) {
+  const input = url.trim();
+  const parsed = new URL(/^[a-z][a-z0-9+.-]*:/i.test(input) ? input : `https://${input}`);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only http and https links are allowed.');
+  return parsed.toString();
+}
+
+function normalizeEmail(email: string) {
+  const value = email.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error('Enter a valid email address.');
+  return `mailto:${value}`;
+}
+
+function normalizeTrustedConnection(provider: string, value: string) {
+  if (provider === 'Email') return normalizeEmail(value);
+
+  const url = normalizeCustomUrl(value);
+  const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+
+  if (provider === 'LinkedIn' && hostname !== 'linkedin.com') {
+    throw new Error('LinkedIn connections must use linkedin.com.');
+  }
+
+  if (provider === 'X' && !['x.com', 'twitter.com'].includes(hostname)) {
+    throw new Error('X connections must use x.com or twitter.com.');
+  }
+
+  if (!['LinkedIn', 'X'].includes(provider)) {
+    throw new Error('Unsupported connection type.');
+  }
+
+  return url;
+}
+
+async function normalizeCardTarget(
+  userId: string,
+  kind: 'custom' | 'connection',
+  url: string | undefined,
+  connectionId: string | null | undefined
+) {
+  if (kind === 'connection') {
+    if (!connectionId) throw new Error('Choose a connection.');
+    const { data, error } = await supabase
+      .from('user_connections')
+      .select('id')
+      .eq('id', connectionId)
+      .eq('owner_id', userId)
+      .maybeSingle();
+    if (error || !data) throw new Error('Connection not found.');
+    return { kind, url: null, connectionId };
+  }
+
+  return { kind, url: normalizeCustomUrl(url ?? ''), connectionId: null };
 }
 
 async function currentUser(headers: Record<string, string | undefined>): Promise<User | null> {
@@ -535,11 +606,59 @@ const app = new Elysia()
     if (!auth.user) return auth.response;
     const { data, error } = await supabase
       .from('cards')
-      .select('id, owner_id, link_1_url, link_2_url, claimed_at, created_at')
+      .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at')
       .eq('owner_id', auth.user.id)
       .order('created_at', { ascending: false });
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
     return { cards: data as Card[] };
+  })
+  .get('/api/connections', async ({ headers }) => {
+    const auth = await requireUser(headers);
+    if (!auth.user) return auth.response;
+
+    const { data, error } = await supabase
+      .from('user_connections')
+      .select('id, owner_id, label, provider, url, provider_account_id, created_at')
+      .eq('owner_id', auth.user.id)
+      .order('created_at', { ascending: true });
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return { connections: data as Connection[] };
+  })
+  .post(
+    '/api/connections',
+    async ({ body, headers }) => {
+      const auth = await requireUser(headers);
+      if (!auth.user) return auth.response;
+
+      let url: string;
+      try {
+        url = normalizeTrustedConnection(body.provider, body.url);
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid URL.' }), { status: 400 });
+      }
+
+      const { data, error } = await supabase
+        .from('user_connections')
+        .insert({
+          owner_id: auth.user.id,
+          label: body.label.trim(),
+          provider: body.provider.trim(),
+          url
+        })
+        .select('id, owner_id, label, provider, url, provider_account_id, created_at')
+        .single();
+      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+      return { connection: data as Connection };
+    },
+    { body: t.Object({ label: t.String({ minLength: 1 }), provider: t.String({ minLength: 1 }), url: t.String() }) }
+  )
+  .delete('/api/connections/:id', async ({ params, headers }) => {
+    const auth = await requireUser(headers);
+    if (!auth.user) return auth.response;
+
+    const { error } = await supabase.from('user_connections').delete().eq('id', params.id).eq('owner_id', auth.user.id);
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return { ok: true };
   })
   .post(
     '/api/cards/claim',
@@ -562,7 +681,7 @@ const app = new Elysia()
         .from('cards')
         .update({ owner_id: auth.user.id, claimed_at: new Date().toISOString() })
         .eq('id', card.id)
-        .select('id, owner_id, link_1_url, link_2_url, claimed_at, created_at')
+        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at')
         .single();
       if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
       return { card: data as Card };
@@ -575,35 +694,51 @@ const app = new Elysia()
       const auth = await requireUser(headers);
       if (!auth.user) return auth.response;
 
-      let link1: string;
-      let link2: string;
+      let link1: Awaited<ReturnType<typeof normalizeCardTarget>>;
+      let link2: Awaited<ReturnType<typeof normalizeCardTarget>>;
       try {
-        link1 = normalizeUrl(body.link1);
-        link2 = normalizeUrl(body.link2);
+        link1 = await normalizeCardTarget(auth.user.id, body.link1Kind, body.link1Url, body.link1ConnectionId);
+        link2 = await normalizeCardTarget(auth.user.id, body.link2Kind, body.link2Url, body.link2ConnectionId);
       } catch (error) {
         return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid URL.' }), { status: 400 });
       }
 
       const { data, error } = await supabase
         .from('cards')
-        .update({ link_1_url: link1, link_2_url: link2 })
+        .update({
+          link_1_kind: link1.kind,
+          link_1_url: link1.url,
+          link_1_connection_id: link1.connectionId,
+          link_2_kind: link2.kind,
+          link_2_url: link2.url,
+          link_2_connection_id: link2.connectionId
+        })
         .eq('id', params.id)
         .eq('owner_id', auth.user.id)
-        .select('id, owner_id, link_1_url, link_2_url, claimed_at, created_at')
+        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at')
         .maybeSingle();
       if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
       if (!data) return new Response(JSON.stringify({ error: 'Card not found.' }), { status: 404 });
       return { card: data as Card };
     },
-    { body: t.Object({ link1: t.String(), link2: t.String() }) }
+    {
+      body: t.Object({
+        link1Kind: t.Union([t.Literal('custom'), t.Literal('connection')]),
+        link1Url: t.Optional(t.String()),
+        link1ConnectionId: t.Optional(t.Nullable(t.String())),
+        link2Kind: t.Union([t.Literal('custom'), t.Literal('connection')]),
+        link2Url: t.Optional(t.String()),
+        link2ConnectionId: t.Optional(t.Nullable(t.String()))
+      })
+    }
   )
   .get('/api/admin/cards', async ({ headers }) => {
     const auth = await requireAdmin(headers);
     if (!auth.user) return auth.response;
 
-    const { data, error } = await supabase
-      .from('cards')
-      .select('id, owner_id, link_1_url, link_2_url, claim_code, claimed_at, created_at')
+      const { data, error } = await supabase
+        .from('cards')
+        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claim_code, claimed_at, created_at')
       .order('created_at', { ascending: false });
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
 
@@ -636,16 +771,26 @@ const app = new Elysia()
 
       const code = randomCode();
       const claimUrl = `${env.appOrigin}/claim?card=${encodeURIComponent(code)}`;
+      let defaultLink1: string | null = null;
+      let defaultLink2: string | null = null;
+      try {
+        defaultLink1 = body.defaultLink1 ? normalizeCustomUrl(body.defaultLink1) : null;
+        defaultLink2 = body.defaultLink2 ? normalizeCustomUrl(body.defaultLink2) : null;
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid URL.' }), { status: 400 });
+      }
       const { data, error } = await supabase
         .from('cards')
         .insert({
           id: body.cardId,
           claim_code: code,
           claim_code_hash: await hashSecret(code),
-          link_1_url: body.defaultLink1 ?? null,
-          link_2_url: body.defaultLink2 ?? null
+          link_1_kind: 'custom',
+          link_2_kind: 'custom',
+          link_1_url: defaultLink1,
+          link_2_url: defaultLink2
         })
-        .select('id, owner_id, link_1_url, link_2_url, claim_code, claimed_at, created_at')
+        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claim_code, claimed_at, created_at')
         .single();
       if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
 
@@ -677,7 +822,7 @@ const app = new Elysia()
 
     const { data: card, error } = await supabase
       .from('cards')
-      .select('id, owner_id, link_1_url, link_2_url')
+      .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id')
       .eq('id', cardId)
       .maybeSingle();
     if (error || !card) return new Response('Unknown Aurealize card.', { status: 404, headers: { 'Content-Type': 'text/plain' } });
@@ -688,12 +833,27 @@ const app = new Elysia()
       });
     }
 
-    const destination = slot === 1 ? card.link_1_url : card.link_2_url;
+    const kind = slot === 1 ? card.link_1_kind : card.link_2_kind;
+    const connectionId = slot === 1 ? card.link_1_connection_id : card.link_2_connection_id;
+    let destination = slot === 1 ? card.link_1_url : card.link_2_url;
+
+    if (kind === 'connection' && connectionId) {
+      const { data: connection, error: connectionError } = await supabase
+        .from('user_connections')
+        .select('url')
+        .eq('id', connectionId)
+        .eq('owner_id', card.owner_id)
+        .maybeSingle();
+      if (connectionError || !connection) return redirect(`${env.appOrigin}/`);
+      destination = connection.url;
+      return redirect(destination);
+    }
+
     if (!destination) {
       return redirect(`${env.appOrigin}/`);
     }
 
-    return redirect(destination);
+    return redirect(`${env.appOrigin}/leaving?to=${encodeURIComponent(destination)}`);
   })
   .get('*', () => Bun.file('dist/index.html'))
   .listen(env.port);

@@ -3,13 +3,12 @@ import {
   FlexRender,
   createColumnHelper,
   getCoreRowModel,
-  useVueTable,
-  type CellContext
+  useVueTable
 } from '@tanstack/vue-table';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import logoUrl from '../../aureallogo.svg';
-import { api, type Card } from '../api';
+import { api, type Card, type Connection } from '../api';
 
 const router = useRouter();
 const email = ref('');
@@ -17,8 +16,23 @@ const isAdmin = ref(false);
 const loading = ref(true);
 const error = ref('');
 const cards = ref<Card[]>([]);
+const connections = ref<Connection[]>([]);
 const saving = reactive<Record<string, boolean>>({});
-const forms = reactive<Record<string, { link1: string; link2: string; message: string; error: string }>>({});
+const forms = reactive<
+  Record<
+    string,
+    {
+      link1Kind: 'custom' | 'connection';
+      link1Url: string;
+      link1ConnectionId: string;
+      link2Kind: 'custom' | 'connection';
+      link2Url: string;
+      link2ConnectionId: string;
+      message: string;
+      error: string;
+    }
+  >
+>({});
 
 const hasCards = computed(() => cards.value.length > 0);
 const columnHelper = createColumnHelper<Card>();
@@ -31,12 +45,12 @@ const columns = [
   columnHelper.display({
     id: 'link1',
     header: 'Link 1',
-    cell: linkCell(1)
+    cell: () => ''
   }),
   columnHelper.display({
     id: 'link2',
     header: 'Link 2',
-    cell: linkCell(2)
+    cell: () => ''
   }),
   columnHelper.display({
     id: 'status',
@@ -58,19 +72,6 @@ const table = useVueTable({
   getCoreRowModel: getCoreRowModel()
 });
 
-function linkCell(slot: 1 | 2) {
-  return (info: CellContext<Card, unknown>) => {
-    const card = info.row.original;
-    const form = forms[card.id];
-    return {
-      card,
-      slot,
-      value: slot === 1 ? form?.link1 : form?.link2,
-      path: `/card_${card.id}_${slot}`
-    };
-  };
-}
-
 async function load() {
   loading.value = true;
   error.value = '';
@@ -81,12 +82,17 @@ async function load() {
   }
   email.value = session.user.email;
   isAdmin.value = session.isAdmin;
-  const result = await api.cards();
+  const [result, connectionResult] = await Promise.all([api.cards(), api.connections()]);
   cards.value = result.cards;
+  connections.value = connectionResult.connections;
   for (const card of cards.value) {
     forms[card.id] = {
-      link1: card.link_1_url ?? '',
-      link2: card.link_2_url ?? '',
+      link1Kind: card.link_1_kind ?? 'custom',
+      link1Url: card.link_1_url ?? '',
+      link1ConnectionId: card.link_1_connection_id ?? '',
+      link2Kind: card.link_2_kind ?? 'custom',
+      link2Url: card.link_2_url ?? '',
+      link2ConnectionId: card.link_2_connection_id ?? '',
       message: '',
       error: ''
     };
@@ -100,7 +106,14 @@ async function save(card: Card) {
   form.error = '';
   form.message = '';
   try {
-    const result = await api.updateCard(card.id, form.link1, form.link2);
+    const result = await api.updateCard(card.id, {
+      link1Kind: form.link1Kind,
+      link1Url: form.link1Url,
+      link1ConnectionId: form.link1ConnectionId || null,
+      link2Kind: form.link2Kind,
+      link2Url: form.link2Url,
+      link2ConnectionId: form.link2ConnectionId || null
+    });
     Object.assign(card, result.card);
     form.message = 'Links saved.';
   } catch (cause) {
@@ -123,13 +136,10 @@ onMounted(load);
     <header class="topbar">
       <div class="topbar-title">
         <img class="topbar-logo" :src="logoUrl" alt="Aurealize" />
-        <div>
-          <p class="eyebrow">Aurealize</p>
-          <h1>Card links</h1>
-        </div>
+        <h1>Card links</h1>
       </div>
       <div class="account">
-        <span>{{ email }}</span>
+        <RouterLink class="secondary compact" to="/settings">Settings</RouterLink>
         <RouterLink v-if="isAdmin" class="secondary compact" to="/admin">Admin</RouterLink>
         <button class="secondary compact" @click="logout">Log out</button>
       </div>
@@ -161,23 +171,57 @@ onMounted(load);
               <td v-for="cell in row.getVisibleCells()" :key="cell.id" :class="`cell-${cell.column.id}`">
                 <template v-if="cell.column.id === 'link1' || cell.column.id === 'link2'">
                   <div class="link-edit">
-                    <input
+                    <select
                       v-if="cell.column.id === 'link1'"
-                      v-model="forms[row.original.id].link1"
-                      aria-label="Link 1 destination"
+                      v-model="forms[row.original.id].link1Kind"
+                      aria-label="Link 1 target type"
+                    >
+                      <option value="connection">Connection</option>
+                      <option value="custom">Custom link</option>
+                    </select>
+                    <select v-else v-model="forms[row.original.id].link2Kind" aria-label="Link 2 target type">
+                      <option value="connection">Connection</option>
+                      <option value="custom">Custom link</option>
+                    </select>
+
+                    <select
+                      v-if="cell.column.id === 'link1' && forms[row.original.id].link1Kind === 'connection'"
+                      v-model="forms[row.original.id].link1ConnectionId"
+                      aria-label="Link 1 connection"
+                    >
+                      <option value="">Choose connection</option>
+                      <option v-for="connection in connections" :key="connection.id" :value="connection.id">
+                        {{ connection.label }}
+                      </option>
+                    </select>
+                    <select
+                      v-else-if="cell.column.id === 'link2' && forms[row.original.id].link2Kind === 'connection'"
+                      v-model="forms[row.original.id].link2ConnectionId"
+                      aria-label="Link 2 connection"
+                    >
+                      <option value="">Choose connection</option>
+                      <option v-for="connection in connections" :key="connection.id" :value="connection.id">
+                        {{ connection.label }}
+                      </option>
+                    </select>
+
+                    <input
+                      v-else-if="cell.column.id === 'link1'"
+                      v-model="forms[row.original.id].link1Url"
+                      aria-label="Link 1 custom destination"
                       placeholder="https://example.com/profile"
                     />
                     <input
                       v-else
-                      v-model="forms[row.original.id].link2"
-                      aria-label="Link 2 destination"
+                      v-model="forms[row.original.id].link2Url"
+                      aria-label="Link 2 custom destination"
                       placeholder="https://example.com/shop"
                     />
                   </div>
                 </template>
                 <template v-else-if="cell.column.id === 'status'">
                   <span
-                    class="status-pill"
+                    class="status-box"
                     :class="{
                       success: Boolean(forms[row.original.id].message),
                       error: Boolean(forms[row.original.id].error)

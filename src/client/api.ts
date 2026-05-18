@@ -8,7 +8,21 @@ export type Card = {
   owner_id: string | null;
   link_1_url: string | null;
   link_2_url: string | null;
+  link_1_kind?: 'custom' | 'connection' | null;
+  link_2_kind?: 'custom' | 'connection' | null;
+  link_1_connection_id?: string | null;
+  link_2_connection_id?: string | null;
   claimed_at: string | null;
+  created_at: string;
+};
+
+export type Connection = {
+  id: string;
+  owner_id: string;
+  label: string;
+  provider: string;
+  url: string;
+  provider_account_id?: string | null;
   created_at: string;
 };
 
@@ -68,10 +82,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ code })
     }),
-  updateCard: (id: string, link1: string, link2: string) =>
+  connections: () => request<{ connections: Connection[] }>('/api/connections'),
+  createConnection: (label: string, provider: string, url: string) =>
+    request<{ connection: Connection }>('/api/connections', {
+      method: 'POST',
+      body: JSON.stringify({ label, provider, url })
+    }),
+  deleteConnection: (id: string) => request<{ ok: true }>(`/api/connections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  updateCard: (
+    id: string,
+    target: {
+      link1Kind: 'custom' | 'connection';
+      link1Url?: string;
+      link1ConnectionId?: string | null;
+      link2Kind: 'custom' | 'connection';
+      link2Url?: string;
+      link2ConnectionId?: string | null;
+    }
+  ) =>
     request<{ card: Card }>(`/api/cards/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ link1, link2 })
+      body: JSON.stringify(target)
     }),
   adminCards: () => request<{ cards: AdminCard[]; nextId: string }>('/api/admin/cards'),
   adminNextCardId: () => request<{ nextId: string }>('/api/admin/cards/next-id'),
