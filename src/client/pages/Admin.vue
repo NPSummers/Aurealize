@@ -69,7 +69,7 @@ async function writeNfc(slot: 1 | 2) {
   nfcWriting.value = String(slot) as '1' | '2';
 
   try {
-    const writer = new window.NDEFReader();
+    const writer = new (window as any).NDEFReader();
     await writer.write({ records: [{ recordType: 'url', data: cardPath(slot) }] });
     if (slot === 1) wroteLink1.value = true;
     if (slot === 2) wroteLink2.value = true;
