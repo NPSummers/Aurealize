@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import logoUrl from '../../aureallogo.svg';
+import AppShell from '../components/AppShell.vue';
 import { api, type Connection } from '../api';
 
 const router = useRouter();
@@ -72,20 +72,11 @@ function syncProvider() {
 </script>
 
 <template>
-  <main class="app-shell">
-    <header class="topbar">
-      <div class="topbar-title">
-        <img class="topbar-logo" :src="logoUrl" alt="Aurealize" />
-        <h1>Settings</h1>
-      </div>
-      <div class="account">
-        <RouterLink class="secondary compact" to="/app">Dashboard</RouterLink>
-        <RouterLink v-if="isAdmin" class="secondary compact" to="/admin">Admin</RouterLink>
-        <button class="secondary compact" @click="logout">Log out</button>
-      </div>
-    </header>
-
-    <section v-if="loading" class="panel status-panel">Loading settings...</section>
+  <AppShell active="settings" title="Settings" subtitle="Manage trusted destinations and account options." :is-admin="isAdmin">
+    <section v-if="loading" class="skeleton-stack">
+      <div class="skeleton-line wide"></div>
+      <div class="skeleton-panel"></div>
+    </section>
     <section v-else class="settings-grid" v-motion-pop-visible>
       <form class="panel settings-form" @submit.prevent="addConnection">
         <div>
@@ -131,9 +122,9 @@ function syncProvider() {
         </article>
         <article v-if="connections.length === 0" class="connection-card">
           <h2>No connections yet</h2>
-          <p class="muted">Add LinkedIn, Facebook, a website, or any profile link.</p>
+          <p class="muted">Add LinkedIn, X, or Email so card links can use trusted destinations.</p>
         </article>
       </section>
     </section>
-  </main>
+  </AppShell>
 </template>

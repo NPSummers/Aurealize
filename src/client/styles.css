@@ -19,7 +19,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #08090d;
+  background: #090a0f;
 }
 
 a {
@@ -258,6 +258,107 @@ button:disabled {
   padding: 28px 0 56px;
 }
 
+.app-layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 244px 1fr;
+  background: #090a0f;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  border-right: 1px solid rgba(247, 243, 234, 0.08);
+  background: #0d0f15;
+  padding: 22px 16px;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px 14px;
+  color: #f7f3ea;
+  text-decoration: none;
+  font-weight: 900;
+}
+
+.sidebar-brand img {
+  width: 34px;
+  height: 34px;
+}
+
+.sidebar-nav {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #b7b3aa;
+  padding: 0 10px;
+  text-align: left;
+  text-decoration: none;
+  font-weight: 750;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  background: rgba(97, 105, 179, 0.16);
+  color: #f7f3ea;
+}
+
+.nav-button {
+  margin-top: auto;
+  width: 100%;
+  cursor: pointer;
+}
+
+.content-shell {
+  min-width: 0;
+  padding: 28px;
+}
+
+.content-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.content-header h1 {
+  margin-top: 6px;
+  font-size: clamp(1.85rem, 3vw, 2.7rem);
+  line-height: 1.05;
+}
+
+.breadcrumb {
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.content-main {
+  display: grid;
+  gap: 14px;
+}
+
+.mobile-nav {
+  display: none;
+}
+
 .topbar {
   display: flex;
   justify-content: center;
@@ -313,6 +414,149 @@ button:disabled {
   overflow: hidden;
 }
 
+.helper-panel,
+.dashboard-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  border-radius: 8px;
+  background: #101218;
+  padding: 18px;
+  margin-bottom: 14px;
+}
+
+.helper-panel h2 {
+  margin-bottom: 8px;
+  font-size: 1.25rem;
+}
+
+.dashboard-summary {
+  justify-content: flex-start;
+}
+
+.dashboard-summary div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dashboard-summary strong {
+  font-size: 1.7rem;
+}
+
+.mobile-card-list {
+  display: none;
+}
+
+.mobile-card-editor {
+  display: grid;
+  gap: 16px;
+  border: 1px solid rgba(247, 243, 234, 0.1);
+  border-radius: 8px;
+  background: #101218;
+  padding: 18px;
+}
+
+.mobile-card-head,
+.mobile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-card-head strong {
+  font-size: 1.4rem;
+}
+
+.mobile-link-block {
+  display: grid;
+  gap: 10px;
+}
+
+.mobile-link-block h2 {
+  font-size: 1rem;
+}
+
+.link-block-title,
+.link-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.link-meta {
+  justify-content: flex-start;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.badge.trusted {
+  background: rgba(133, 224, 163, 0.12);
+  color: #95e8b0;
+}
+
+.badge.warning {
+  background: rgba(255, 194, 102, 0.12);
+  color: #ffd28a;
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-radius: 8px;
+  background: rgba(255, 155, 142, 0.1);
+  padding: 14px 16px;
+}
+
+.skeleton-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.skeleton-line,
+.skeleton-panel {
+  border-radius: 8px;
+  background: linear-gradient(90deg, #101218 0%, #171a23 50%, #101218 100%);
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton-line {
+  width: 220px;
+  height: 22px;
+}
+
+.skeleton-line.wide {
+  width: min(420px, 80%);
+}
+
+.skeleton-panel {
+  height: 92px;
+}
+
+@keyframes skeleton-pulse {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
 .table-scroll {
   overflow-x: auto;
 }
@@ -332,7 +576,7 @@ td {
 }
 
 th {
-  background: rgba(97, 105, 179, 0.12);
+  background: #131620;
   color: #c9cdf7;
   font-size: 0.76rem;
   letter-spacing: 0.12em;
@@ -380,7 +624,7 @@ tbody tr:hover {
   min-height: 30px;
   border: 1px solid rgba(247, 243, 234, 0.12);
   border-radius: 6px;
-  background: rgba(247, 243, 234, 0.06);
+  background: #151822;
   color: #c7c1b6;
   padding: 0 10px;
   font-size: 0.83rem;
@@ -541,6 +785,64 @@ tbody tr:hover {
 }
 
 @media (max-width: 780px) {
+  body {
+    padding-bottom: 72px;
+  }
+
+  .app-layout {
+    display: block;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .content-shell {
+    padding: 18px 10px 24px;
+  }
+
+  .content-header {
+    align-items: flex-start;
+    flex-direction: column;
+    margin-bottom: 18px;
+  }
+
+  .content-header h1 {
+    font-size: clamp(1.8rem, 8vw, 2.35rem);
+  }
+
+  .mobile-nav {
+    position: fixed;
+    z-index: 20;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 6px;
+    border: 1px solid rgba(247, 243, 234, 0.1);
+    border-radius: 8px;
+    background: rgba(13, 15, 21, 0.96);
+    padding: 6px;
+  }
+
+  .mobile-nav-link {
+    display: grid;
+    place-items: center;
+    min-height: 42px;
+    border-radius: 6px;
+    color: #b7b3aa;
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 800;
+  }
+
+  .mobile-nav-link.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
   .shell,
   .app-shell {
     width: min(100% - 20px, 1120px);
@@ -597,6 +899,39 @@ tbody tr:hover {
 
   .table-panel {
     border-radius: 6px;
+  }
+
+  .desktop-table {
+    display: none;
+  }
+
+  .mobile-card-list {
+    display: grid;
+    gap: 14px;
+  }
+
+  .helper-panel,
+  .dashboard-summary,
+  .mobile-card-head,
+  .mobile-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .helper-panel .secondary,
+  .mobile-actions button {
+    width: 100%;
+  }
+
+  .dashboard-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .dashboard-summary div {
+    display: grid;
+    gap: 4px;
+    text-align: center;
   }
 
   table {

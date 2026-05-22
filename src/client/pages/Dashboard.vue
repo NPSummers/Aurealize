@@ -7,7 +7,7 @@ import {
 } from '@tanstack/vue-table';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import logoUrl from '../../aureallogo.svg';
+import AppShell from '../components/AppShell.vue';
 import { api, type Card, type Connection } from '../api';
 
 const router = useRouter();
@@ -35,6 +35,9 @@ const forms = reactive<
 >({});
 
 const hasCards = computed(() => cards.value.length > 0);
+const customLinkCount = computed(() =>
+  cards.value.reduce((total, card) => total + (slotKind(card, 1) === 'custom' ? 1 : 0) + (slotKind(card, 2) === 'custom' ? 1 : 0), 0)
+);
 const columnHelper = createColumnHelper<Card>();
 
 const columns = [
@@ -51,6 +54,11 @@ const columns = [
     id: 'link2',
     header: 'Link 2',
     cell: () => ''
+  }),
+  columnHelper.display({
+    id: 'claimed',
+    header: 'Claimed',
+    cell: (info) => formatDate(info.row.original.claimed_at)
   }),
   columnHelper.display({
     id: 'status',
@@ -123,6 +131,20 @@ async function save(card: Card) {
   }
 }
 
+function formatDate(value: string | null) {
+  if (!value) return 'Not claimed';
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
+}
+
+function slotKind(card: Card, slot: 1 | 2) {
+  return (slot === 1 ? card.link_1_kind : card.link_2_kind) ?? 'custom';
+}
+
+function selectedConnectionLabel(cardId: string, slot: 1 | 2) {
+  const id = slot === 1 ? forms[cardId]?.link1ConnectionId : forms[cardId]?.link2ConnectionId;
+  return connections.value.find((connection) => connection.id === id)?.label ?? 'Choose connection';
+}
+
 async function logout() {
   await api.logout();
   router.replace('/');
@@ -132,27 +154,103 @@ onMounted(load);
 </script>
 
 <template>
-  <main class="app-shell">
-    <header class="topbar">
-      <div class="topbar-title">
-        <img class="topbar-logo" :src="logoUrl" alt="Aurealize" />
-        <h1>Card links</h1>
-      </div>
-      <div class="account">
-        <RouterLink class="secondary compact" to="/settings">Settings</RouterLink>
-        <RouterLink v-if="isAdmin" class="secondary compact" to="/admin">Admin</RouterLink>
-        <button class="secondary compact" @click="logout">Log out</button>
-      </div>
-    </header>
-
-    <section v-if="loading" class="panel status-panel">Loading cards...</section>
-    <section v-else-if="error" class="panel status-panel error">{{ error }}</section>
+  <AppShell active="dashboard" title="Cards" subtitle="Manage where each card opens." :is-admin="isAdmin">
+    <section v-if="loading" class="skeleton-stack">
+      <div class="skeleton-line wide"></div>
+      <div class="skeleton-panel"></div>
+      <div class="skeleton-panel"></div>
+    </section>
+    <section v-else-if="error" class="alert error">
+      <span>{{ error }}</span>
+      <button class="secondary compact" @click="load">Retry</button>
+    </section>
     <section v-else-if="!hasCards" class="empty-state" v-motion-pop-visible>
       <h2>No cards claimed yet</h2>
-      <p class="muted">Scan the QR code on an Aurealize card to attach it to this account.</p>
+      <p class="muted">Open the claim link for a card to attach it to this account. Your cards will appear here.</p>
+      <RouterLink class="secondary compact" to="/settings">Set up connections</RouterLink>
     </section>
 
-    <section v-else class="table-panel" v-motion :initial="{ opacity: 0, y: 16 }" :enter="{ opacity: 1, y: 0 }">
+    <template v-else>
+      <section class="helper-panel" v-if="connections.length === 0">
+        <div>
+          <h2>Add connections first</h2>
+          <p class="muted">Connections are trusted destinations like LinkedIn, X, and Email. Custom links still work, but visitors see a confirmation screen.</p>
+        </div>
+        <RouterLink class="secondary compact" to="/settings">Add connections</RouterLink>
+      </section>
+
+      <section class="dashboard-summary">
+        <div>
+          <strong>{{ cards.length }}</strong>
+          <span class="muted">{{ cards.length === 1 ? 'card claimed' : 'cards claimed' }}</span>
+        </div>
+        <div>
+          <strong>{{ connections.length }}</strong>
+          <span class="muted">{{ connections.length === 1 ? 'connection' : 'connections' }}</span>
+        </div>
+        <div>
+          <strong>{{ customLinkCount }}</strong>
+          <span class="muted">custom links</span>
+        </div>
+      </section>
+
+      <section class="mobile-card-list">
+        <article v-for="card in cards" :key="card.id" class="mobile-card-editor">
+          <div class="mobile-card-head">
+            <div>
+              <span class="muted">Card</span>
+              <strong>{{ card.id }}</strong>
+            </div>
+            <span class="status-box">Claimed {{ formatDate(card.claimed_at) }}</span>
+          </div>
+
+          <div class="mobile-link-block">
+            <div class="link-block-title">
+              <h2>Link 1</h2>
+              <span :class="['badge', forms[card.id].link1Kind === 'connection' ? 'trusted' : 'warning']">
+                {{ forms[card.id].link1Kind === 'connection' ? 'Trusted' : 'Warning' }}
+              </span>
+            </div>
+            <select v-model="forms[card.id].link1Kind" aria-label="Link 1 target type">
+              <option value="connection">Connection</option>
+              <option value="custom">Custom link</option>
+            </select>
+            <select v-if="forms[card.id].link1Kind === 'connection'" v-model="forms[card.id].link1ConnectionId" aria-label="Link 1 connection">
+              <option value="">Choose connection</option>
+              <option v-for="connection in connections" :key="connection.id" :value="connection.id">{{ connection.label }}</option>
+            </select>
+            <input v-else v-model="forms[card.id].link1Url" aria-label="Link 1 custom destination" placeholder="example.com/profile" />
+          </div>
+
+          <div class="mobile-link-block">
+            <div class="link-block-title">
+              <h2>Link 2</h2>
+              <span :class="['badge', forms[card.id].link2Kind === 'connection' ? 'trusted' : 'warning']">
+                {{ forms[card.id].link2Kind === 'connection' ? 'Trusted' : 'Warning' }}
+              </span>
+            </div>
+            <select v-model="forms[card.id].link2Kind" aria-label="Link 2 target type">
+              <option value="connection">Connection</option>
+              <option value="custom">Custom link</option>
+            </select>
+            <select v-if="forms[card.id].link2Kind === 'connection'" v-model="forms[card.id].link2ConnectionId" aria-label="Link 2 connection">
+              <option value="">Choose connection</option>
+              <option v-for="connection in connections" :key="connection.id" :value="connection.id">{{ connection.label }}</option>
+            </select>
+            <input v-else v-model="forms[card.id].link2Url" aria-label="Link 2 custom destination" placeholder="example.com/shop" />
+          </div>
+
+          <div class="mobile-actions">
+            <button class="primary" :disabled="saving[card.id]" @click="save(card)">
+              {{ saving[card.id] ? 'Saving...' : 'Save changes' }}
+            </button>
+            <span v-if="forms[card.id].message" class="success">{{ forms[card.id].message }}</span>
+            <span v-if="forms[card.id].error" class="error">{{ forms[card.id].error }}</span>
+          </div>
+        </article>
+      </section>
+
+    <section class="table-panel desktop-table" v-motion :initial="{ opacity: 0, y: 16 }" :enter="{ opacity: 1, y: 0 }">
       <div class="table-scroll">
         <table>
           <thead>
@@ -171,6 +269,29 @@ onMounted(load);
               <td v-for="cell in row.getVisibleCells()" :key="cell.id" :class="`cell-${cell.column.id}`">
                 <template v-if="cell.column.id === 'link1' || cell.column.id === 'link2'">
                   <div class="link-edit">
+                    <div class="link-meta">
+                      <span
+                        :class="[
+                          'badge',
+                          (cell.column.id === 'link1' ? forms[row.original.id].link1Kind : forms[row.original.id].link2Kind) === 'connection'
+                            ? 'trusted'
+                            : 'warning'
+                        ]"
+                      >
+                        {{
+                          (cell.column.id === 'link1' ? forms[row.original.id].link1Kind : forms[row.original.id].link2Kind) === 'connection'
+                            ? 'Trusted'
+                            : 'Warning'
+                        }}
+                      </span>
+                      <span class="muted">
+                        {{
+                          (cell.column.id === 'link1' ? forms[row.original.id].link1Kind : forms[row.original.id].link2Kind) === 'connection'
+                            ? selectedConnectionLabel(row.original.id, cell.column.id === 'link1' ? 1 : 2)
+                            : 'Custom link'
+                        }}
+                      </span>
+                    </div>
                     <select
                       v-if="cell.column.id === 'link1'"
                       v-model="forms[row.original.id].link1Kind"
@@ -230,6 +351,11 @@ onMounted(load);
                     <FlexRender :render="cell.column.columnDef.cell" :props="cell.getContext()" />
                   </span>
                 </template>
+                <template v-else-if="cell.column.id === 'claimed'">
+                  <span class="muted">
+                    <FlexRender :render="cell.column.columnDef.cell" :props="cell.getContext()" />
+                  </span>
+                </template>
                 <template v-else-if="cell.column.id === 'actions'">
                   <button class="primary compact" :disabled="saving[row.original.id]" @click="save(row.original)">
                     {{ saving[row.original.id] ? 'Saving...' : 'Save' }}
@@ -246,5 +372,6 @@ onMounted(load);
         </table>
       </div>
     </section>
-  </main>
+    </template>
+  </AppShell>
 </template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import logoUrl from '../../aureallogo.svg';
+import AppShell from '../components/AppShell.vue';
 import { api, type AdminCard } from '../api';
 
 type NDEFReaderConstructor = new () => {
@@ -135,20 +135,11 @@ onMounted(load);
 </script>
 
 <template>
-  <main class="app-shell">
-    <header class="topbar">
-      <div class="topbar-title">
-        <img class="topbar-logo" :src="logoUrl" alt="Aurealize" />
-        <h1>Card setup</h1>
-      </div>
-      <div class="account">
-        <RouterLink class="secondary compact" to="/app">Dashboard</RouterLink>
-        <RouterLink class="secondary compact" to="/settings">Settings</RouterLink>
-        <button class="secondary compact" @click="logout">Log out</button>
-      </div>
-    </header>
-
-    <section v-if="loading" class="panel status-panel">Loading admin panel...</section>
+  <AppShell active="admin" title="Card setup" subtitle="Prepare new cards, optional NFC tags, and claim QR codes." :is-admin="true">
+    <section v-if="loading" class="skeleton-stack">
+      <div class="skeleton-line wide"></div>
+      <div class="skeleton-panel"></div>
+    </section>
 
     <template v-else>
       <section class="admin-grid">
@@ -156,6 +147,7 @@ onMounted(load);
           <div>
             <p class="eyebrow">New card</p>
             <h2>{{ cardId }}</h2>
+            <p class="muted">Create the card first, then print or save the claim QR below. NFC writing is optional.</p>
           </div>
 
           <label>
@@ -189,6 +181,7 @@ onMounted(load);
           </div>
 
           <p v-if="!nfcSupported" class="muted small-copy">Use Chrome on Android for NFC writing.</p>
+          <p v-else class="muted small-copy">Write tags before generating if you are preparing NFC cards on this phone.</p>
 
           <button class="primary" :disabled="saving || !canGenerate">
             {{ saving ? 'Saving...' : 'Generate' }}
@@ -200,6 +193,7 @@ onMounted(load);
 
         <section class="panel admin-preview">
           <p class="eyebrow">NFC targets</p>
+          <p class="muted">These are the URLs written to the physical tags.</p>
           <div>
             <span class="muted">Tag 1</span>
             <strong>{{ cardPath(1) }}</strong>
@@ -222,5 +216,5 @@ onMounted(load);
         </article>
       </section>
     </template>
-  </main>
+  </AppShell>
 </template>

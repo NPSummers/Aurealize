@@ -647,7 +647,12 @@ const app = new Elysia()
         })
         .select('id, owner_id, label, provider, url, provider_account_id, created_at')
         .single();
-      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+      if (error) {
+        const message = error.message.includes('user_connections_url_check')
+          ? 'Database setup needs updating: allow mailto: in user_connections_url_check.'
+          : error.message;
+        return new Response(JSON.stringify({ error: message }), { status: 500 });
+      }
       return { connection: data as Connection };
     },
     { body: t.Object({ label: t.String({ minLength: 1 }), provider: t.String({ minLength: 1 }), url: t.String() }) }
