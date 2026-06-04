@@ -10,8 +10,8 @@ import {
   type RegistrationResponseJSON,
   type WebAuthnCredential
 } from '@simplewebauthn/server';
-import { createClient } from '@supabase/supabase-js';
 import { Elysia, redirect, t } from 'elysia';
+import postgres from 'postgres';
 import QRCode from 'qrcode';
 import { Resend } from 'resend';
 
@@ -57,24 +57,24 @@ type Connection = {
 };
 
 const env = {
-  supabaseUrl: Bun.env.SUPABASE_URL || 'https://example.supabase.co',
-  supabaseServiceRoleKey: Bun.env.SUPABASE_SERVICE_ROLE_KEY || 'missing-service-role-key',
+  postgresUrl: Bun.env.POSTGRES_URL || Bun.env.DATABASE_URL || '',
   resendApiKey: Bun.env.RESEND_API_KEY ?? '',
   resendFrom: Bun.env.RESEND_FROM ?? 'Aurealize <verify@example.com>',
   appOrigin: (Bun.env.APP_ORIGIN ?? 'http://localhost:5173').replace(/\/$/, ''),
   adminEmail: (Bun.env.ADMIN_EMAIL ?? '').trim().toLowerCase(),
   port: Number(Bun.env.PORT ?? 3000)
 };
-const supabaseConfigured = Boolean(Bun.env.SUPABASE_URL && Bun.env.SUPABASE_SERVICE_ROLE_KEY);
+const databaseConfigured = Boolean(env.postgresUrl);
 const rpName = 'Aurealize';
 const rpID = new URL(env.appOrigin).hostname;
 
-if (!supabaseConfigured) {
-  console.warn('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. API calls will fail until .env is configured.');
+if (!databaseConfigured) {
+  console.warn('Missing POSTGRES_URL or DATABASE_URL. API calls will fail until .env is configured.');
 }
 
-const supabase = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
-  auth: { persistSession: false }
+const sql = postgres(env.postgresUrl || 'postgresql://postgres:postgres@localhost:5432/postgres', {
+  max: 10,
+  ssl: env.postgresUrl && !/localhost|127\.0\.0\.1/i.test(env.postgresUrl) && !env.postgresUrl.includes('sslmode=disable') ? 'require' : false
 });
 const resend = env.resendApiKey ? new Resend(env.resendApiKey) : null;
 
@@ -168,6 +168,14 @@ function normalizeTrustedConnection(provider: string, value: string) {
   return url;
 }
 
+function jsonError(message: string, status = 500) {
+  return new Response(JSON.stringify({ error: message }), { status });
+}
+
+function dbUnavailable() {
+  return jsonError('Postgres is not configured. Add POSTGRES_URL or DATABASE_URL to .env.', 500);
+}
+
 async function normalizeCardTarget(
   userId: string,
   kind: 'custom' | 'connection',
@@ -176,13 +184,13 @@ async function normalizeCardTarget(
 ) {
   if (kind === 'connection') {
     if (!connectionId) throw new Error('Choose a connection.');
-    const { data, error } = await supabase
-      .from('user_connections')
-      .select('id')
-      .eq('id', connectionId)
-      .eq('owner_id', userId)
-      .maybeSingle();
-    if (error || !data) throw new Error('Connection not found.');
+    const [connection] = await sql<{ id: string }[]>`
+      select id
+      from user_connections
+      where id = ${connectionId} and owner_id = ${userId}
+      limit 1
+    `;
+    if (!connection) throw new Error('Connection not found.');
     return { kind, url: null, connectionId };
   }
 
@@ -190,37 +198,36 @@ async function normalizeCardTarget(
 }
 
 async function currentUser(headers: Record<string, string | undefined>): Promise<User | null> {
-  if (!supabaseConfigured) return null;
+  if (!databaseConfigured) return null;
 
   const token = parseCookies(headers.cookie).aurealize_session;
   if (!token) return null;
 
   const tokenHash = await hashSecret(token);
-  const { data: session, error: sessionError } = await supabase
-    .from('sessions')
-    .select('user_id, expires_at')
-    .eq('token_hash', tokenHash)
-    .maybeSingle();
+  const [session] = await sql<{ user_id: string; expires_at: string }[]>`
+    select user_id, expires_at
+    from sessions
+    where token_hash = ${tokenHash}
+    limit 1
+  `;
 
-  if (sessionError || !session || new Date(session.expires_at).getTime() <= Date.now()) return null;
+  if (!session || new Date(session.expires_at).getTime() <= Date.now()) return null;
 
-  const { data: user, error: userError } = await supabase
-    .from('aurealize_users')
-    .select('id, email, passkey_prompt_dismissed_at')
-    .eq('id', session.user_id)
-    .maybeSingle();
+  const [user] = await sql<User[]>`
+    select id, email, passkey_prompt_dismissed_at
+    from aurealize_users
+    where id = ${session.user_id}
+    limit 1
+  `;
 
-  if (userError || !user) return null;
-  return user;
+  return user ?? null;
 }
 
 async function requireUser(headers: Record<string, string | undefined>) {
-  if (!supabaseConfigured) {
+  if (!databaseConfigured) {
     return {
       user: null,
-      response: new Response(JSON.stringify({ error: 'Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env.' }), {
-        status: 500
-      })
+      response: dbUnavailable()
     };
   }
 
@@ -234,48 +241,47 @@ async function requireUser(headers: Record<string, string | undefined>) {
 async function createSession(userId: string, set: { headers: Record<string, string | number> }) {
   const sessionToken = randomCode();
   const expires = new Date(Date.now() + sessionDays * 24 * hour);
-  const { error: sessionError } = await supabase.from('sessions').insert({
-    user_id: userId,
-    token_hash: await hashSecret(sessionToken),
-    expires_at: expires.toISOString()
-  });
-  if (sessionError) throw new Error(sessionError.message);
+  await sql`
+    insert into sessions (user_id, token_hash, expires_at)
+    values (${userId}, ${await hashSecret(sessionToken)}, ${expires.toISOString()})
+  `;
 
   set.headers['Set-Cookie'] = sessionCookie(sessionToken, expires);
 }
 
 async function passkeyCount(userId: string) {
-  const { count, error } = await supabase
-    .from('passkeys')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId);
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+  const [row] = await sql<{ count: number }[]>`
+    select count(*)::int as count
+    from passkeys
+    where user_id = ${userId}
+  `;
+  return row?.count ?? 0;
 }
 
 async function storeChallenge(userId: string, purpose: 'registration' | 'authentication', challenge: string) {
-  await supabase.from('passkey_challenges').delete().eq('user_id', userId).eq('purpose', purpose);
-  const { error } = await supabase.from('passkey_challenges').insert({
-    user_id: userId,
-    purpose,
-    challenge_hash: await hashSecret(challenge),
-    expires_at: nowPlus(5 * 60 * 1000)
-  });
-  if (error) throw new Error(error.message);
+  await sql`
+    delete from passkey_challenges
+    where user_id = ${userId} and purpose = ${purpose}
+  `;
+  await sql`
+    insert into passkey_challenges (user_id, purpose, challenge_hash, expires_at)
+    values (${userId}, ${purpose}, ${await hashSecret(challenge)}, ${nowPlus(5 * 60 * 1000)})
+  `;
 }
 
 async function consumeChallenge(userId: string, purpose: 'registration' | 'authentication', challenge: string) {
   const challengeHash = await hashSecret(challenge);
-  const { data, error } = await supabase
-    .from('passkey_challenges')
-    .select('id, expires_at')
-    .eq('user_id', userId)
-    .eq('purpose', purpose)
-    .eq('challenge_hash', challengeHash)
-    .maybeSingle();
+  const [challengeRow] = await sql<{ id: string; expires_at: string }[]>`
+    select id, expires_at
+    from passkey_challenges
+    where user_id = ${userId}
+      and purpose = ${purpose}
+      and challenge_hash = ${challengeHash}
+    limit 1
+  `;
 
-  if (error || !data || new Date(data.expires_at).getTime() <= Date.now()) return false;
-  await supabase.from('passkey_challenges').delete().eq('id', data.id);
+  if (!challengeRow || new Date(challengeRow.expires_at).getTime() <= Date.now()) return false;
+  await sql`delete from passkey_challenges where id = ${challengeRow.id}`;
   return true;
 }
 
@@ -299,7 +305,7 @@ async function requireAdmin(headers: Record<string, string | undefined>) {
   if (!env.adminEmail || auth.user.email.toLowerCase() !== env.adminEmail) {
     return {
       user: null,
-      response: new Response(JSON.stringify({ error: 'Admin access required.' }), { status: 403 })
+      response: jsonError('Admin access required.', 403)
     };
   }
 
@@ -346,20 +352,16 @@ const app = new Elysia()
   .post(
     '/api/auth/request',
     async ({ body }) => {
-      if (!supabaseConfigured) {
-        return new Response(JSON.stringify({ error: 'Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env.' }), {
-          status: 500
-        });
-      }
+      if (!databaseConfigured) return dbUnavailable();
 
       const email = body.email.trim().toLowerCase();
       if (body.mode === 'signin') {
-        const { data: existingUser, error: existingError } = await supabase
-          .from('aurealize_users')
-          .select('id')
-          .eq('email', email)
-          .maybeSingle();
-        if (existingError) return new Response(JSON.stringify({ error: existingError.message }), { status: 500 });
+        const [existingUser] = await sql<{ id: string }[]>`
+          select id
+          from aurealize_users
+          where email = ${email}
+          limit 1
+        `;
         if (!existingUser) return new Response(JSON.stringify({ error: 'No Aurealize account exists for that email.' }), { status: 404 });
       }
 
@@ -367,17 +369,15 @@ const app = new Elysia()
       const codeHash = await hashSecret(code);
       const verificationUrl = `${env.appOrigin}/verify?code=${encodeURIComponent(code)}`;
 
-      const { error: upsertError } = await supabase
-        .from('aurealize_users')
-        .upsert({ email }, { onConflict: 'email', ignoreDuplicates: false });
-      if (upsertError) return new Response(JSON.stringify({ error: upsertError.message }), { status: 500 });
-
-      const { error: insertError } = await supabase.from('verification_codes').insert({
-        email,
-        code_hash: codeHash,
-        expires_at: nowPlus(hour)
-      });
-      if (insertError) return new Response(JSON.stringify({ error: insertError.message }), { status: 500 });
+      await sql`
+        insert into aurealize_users (email)
+        values (${email})
+        on conflict (email) do update set email = excluded.email
+      `;
+      await sql`
+        insert into verification_codes (email, code_hash, expires_at)
+        values (${email}, ${codeHash}, ${nowPlus(hour)})
+      `;
 
       await sendVerificationEmail(email, verificationUrl);
       return { ok: true, devVerificationUrl: resend ? undefined : verificationUrl };
@@ -387,31 +387,29 @@ const app = new Elysia()
   .post(
     '/api/auth/verify',
     async ({ body, set }) => {
-      if (!supabaseConfigured) {
-        return new Response(JSON.stringify({ error: 'Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env.' }), {
-          status: 500
-        });
-      }
+      if (!databaseConfigured) return dbUnavailable();
 
       const codeHash = await hashSecret(body.code);
-      const { data: verification, error } = await supabase
-        .from('verification_codes')
-        .select('id, email, expires_at, consumed_at')
-        .eq('code_hash', codeHash)
-        .maybeSingle();
+      const [verification] = await sql<{ id: string; email: string; expires_at: string; consumed_at: string | null }[]>`
+        select id, email, expires_at, consumed_at
+        from verification_codes
+        where code_hash = ${codeHash}
+        limit 1
+      `;
 
-      if (error || !verification) return new Response(JSON.stringify({ error: 'Invalid verification link.' }), { status: 400 });
+      if (!verification) return new Response(JSON.stringify({ error: 'Invalid verification link.' }), { status: 400 });
       if (verification.consumed_at) return new Response(JSON.stringify({ error: 'Verification link has already been used.' }), { status: 400 });
       if (new Date(verification.expires_at).getTime() <= Date.now()) {
         return new Response(JSON.stringify({ error: 'Verification link expired.' }), { status: 400 });
       }
 
-      const { data: user, error: userError } = await supabase
-        .from('aurealize_users')
-        .select('id, email, passkey_prompt_dismissed_at')
-        .eq('email', verification.email)
-        .maybeSingle();
-      if (userError || !user) return new Response(JSON.stringify({ error: 'Could not load user.' }), { status: 500 });
+      const [user] = await sql<User[]>`
+        select id, email, passkey_prompt_dismissed_at
+        from aurealize_users
+        where email = ${verification.email}
+        limit 1
+      `;
+      if (!user) return new Response(JSON.stringify({ error: 'Could not load user.' }), { status: 500 });
 
       try {
         await createSession(user.id, set);
@@ -419,7 +417,11 @@ const app = new Elysia()
         return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Could not create session.' }), { status: 500 });
       }
 
-      await supabase.from('verification_codes').update({ consumed_at: new Date().toISOString() }).eq('id', verification.id);
+      await sql`
+        update verification_codes
+        set consumed_at = ${new Date().toISOString()}
+        where id = ${verification.id}
+      `;
       return { user, passkeyCount: await passkeyCount(user.id) };
     },
     { body: t.Object({ code: t.String({ minLength: 16 }) }) }
@@ -428,11 +430,11 @@ const app = new Elysia()
     const auth = await requireUser(headers);
     if (!auth.user) return auth.response;
 
-    const { data: passkeys, error } = await supabase
-      .from('passkeys')
-      .select('credential_id, transports')
-      .eq('user_id', auth.user.id);
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    const passkeys = await sql<{ credential_id: string; transports: AuthenticatorTransportFuture[] | null }[]>`
+      select credential_id, transports
+      from passkeys
+      where user_id = ${auth.user.id}
+    `;
 
     const options = await generateRegistrationOptions({
       rpName,
@@ -477,18 +479,24 @@ const app = new Elysia()
 
       const response = body.response as RegistrationResponseJSON;
       const credential = verified.registrationInfo.credential;
-      const { error } = await supabase.from('passkeys').insert({
-        user_id: auth.user.id,
-        credential_id: credential.id,
-        public_key: bytesToBase64Url(credential.publicKey),
-        counter: credential.counter,
-        transports: response.response.transports ?? null,
-        device_type: verified.registrationInfo.credentialDeviceType,
-        backed_up: verified.registrationInfo.credentialBackedUp
-      });
-      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+      await sql`
+        insert into passkeys (user_id, credential_id, public_key, counter, transports, device_type, backed_up)
+        values (
+          ${auth.user.id},
+          ${credential.id},
+          ${bytesToBase64Url(credential.publicKey)},
+          ${credential.counter},
+          ${response.response.transports ?? null},
+          ${verified.registrationInfo.credentialDeviceType},
+          ${verified.registrationInfo.credentialBackedUp}
+        )
+      `;
 
-      await supabase.from('aurealize_users').update({ passkey_prompt_dismissed_at: null }).eq('id', auth.user.id);
+      await sql`
+        update aurealize_users
+        set passkey_prompt_dismissed_at = null
+        where id = ${auth.user.id}
+      `;
       return { ok: true };
     },
     { body: t.Object({ response: t.Any() }) }
@@ -497,36 +505,32 @@ const app = new Elysia()
     const auth = await requireUser(headers);
     if (!auth.user) return auth.response;
 
-    const { error } = await supabase
-      .from('aurealize_users')
-      .update({ passkey_prompt_dismissed_at: new Date().toISOString() })
-      .eq('id', auth.user.id);
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    await sql`
+      update aurealize_users
+      set passkey_prompt_dismissed_at = ${new Date().toISOString()}
+      where id = ${auth.user.id}
+    `;
     return { ok: true };
   })
   .post(
     '/api/auth/passkeys/login/options',
     async ({ body }) => {
-      if (!supabaseConfigured) {
-        return new Response(JSON.stringify({ error: 'Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env.' }), {
-          status: 500
-        });
-      }
+      if (!databaseConfigured) return dbUnavailable();
 
       const email = body.email.trim().toLowerCase();
-      const { data: user, error: userError } = await supabase
-        .from('aurealize_users')
-        .select('id, email')
-        .eq('email', email)
-        .maybeSingle();
-      if (userError) return new Response(JSON.stringify({ error: userError.message }), { status: 500 });
+      const [user] = await sql<{ id: string; email: string }[]>`
+        select id, email
+        from aurealize_users
+        where email = ${email}
+        limit 1
+      `;
       if (!user) return new Response(JSON.stringify({ error: 'No Aurealize account exists for that email.' }), { status: 404 });
 
-      const { data: passkeys, error: passkeyError } = await supabase
-        .from('passkeys')
-        .select('credential_id, transports')
-        .eq('user_id', user.id);
-      if (passkeyError) return new Response(JSON.stringify({ error: passkeyError.message }), { status: 500 });
+      const passkeys = await sql<{ credential_id: string; transports: AuthenticatorTransportFuture[] | null }[]>`
+        select credential_id, transports
+        from passkeys
+        where user_id = ${user.id}
+      `;
       if (!passkeys?.length) return new Response(JSON.stringify({ error: 'No passkey is registered for that account.' }), { status: 404 });
 
       const options = await generateAuthenticationOptions({
@@ -546,19 +550,16 @@ const app = new Elysia()
   .post(
     '/api/auth/passkeys/login/verify',
     async ({ body, set, request }) => {
-      if (!supabaseConfigured) {
-        return new Response(JSON.stringify({ error: 'Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env.' }), {
-          status: 500
-        });
-      }
+      if (!databaseConfigured) return dbUnavailable();
 
       const response = body.response as AuthenticationResponseJSON;
-      const { data: passkey, error: passkeyError } = await supabase
-        .from('passkeys')
-        .select('id, user_id, credential_id, public_key, counter, transports, device_type, backed_up')
-        .eq('credential_id', response.id)
-        .maybeSingle();
-      if (passkeyError || !passkey) return new Response(JSON.stringify({ error: 'Passkey not found.' }), { status: 404 });
+      const [passkey] = await sql<Passkey[]>`
+        select id, user_id, credential_id, public_key, counter, transports, device_type, backed_up
+        from passkeys
+        where credential_id = ${response.id}
+        limit 1
+      `;
+      if (!passkey) return new Response(JSON.stringify({ error: 'Passkey not found.' }), { status: 404 });
 
       let verified;
       try {
@@ -566,7 +567,7 @@ const app = new Elysia()
           response,
           expectedOrigin: expectedOrigins(request),
           expectedRPID: rpID,
-          credential: toWebAuthnCredential(passkey as Passkey),
+          credential: toWebAuthnCredential(passkey),
           expectedChallenge: (challenge) => consumeChallenge(passkey.user_id, 'authentication', challenge)
         });
       } catch (error) {
@@ -575,15 +576,14 @@ const app = new Elysia()
 
       if (!verified.verified) return new Response(JSON.stringify({ error: 'Could not verify passkey.' }), { status: 400 });
 
-      const { error: updateError } = await supabase
-        .from('passkeys')
-        .update({
-          counter: verified.authenticationInfo.newCounter,
-          backed_up: verified.authenticationInfo.credentialBackedUp,
-          device_type: verified.authenticationInfo.credentialDeviceType
-        })
-        .eq('id', passkey.id);
-      if (updateError) return new Response(JSON.stringify({ error: updateError.message }), { status: 500 });
+      await sql`
+        update passkeys
+        set
+          counter = ${verified.authenticationInfo.newCounter},
+          backed_up = ${verified.authenticationInfo.credentialBackedUp},
+          device_type = ${verified.authenticationInfo.credentialDeviceType}
+        where id = ${passkey.id}
+      `;
 
       try {
         await createSession(passkey.user_id, set);
@@ -597,32 +597,32 @@ const app = new Elysia()
   )
   .post('/api/auth/logout', async ({ headers, set }) => {
     const token = parseCookies(headers.cookie).aurealize_session;
-    if (token) await supabase.from('sessions').delete().eq('token_hash', await hashSecret(token));
+    if (token && databaseConfigured) await sql`delete from sessions where token_hash = ${await hashSecret(token)}`;
     set.headers['Set-Cookie'] = clearSessionCookie();
     return { ok: true };
   })
   .get('/api/cards', async ({ headers }) => {
     const auth = await requireUser(headers);
     if (!auth.user) return auth.response;
-    const { data, error } = await supabase
-      .from('cards')
-      .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at')
-      .eq('owner_id', auth.user.id)
-      .order('created_at', { ascending: false });
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-    return { cards: data as Card[] };
+    const cards = await sql<Card[]>`
+      select id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at
+      from cards
+      where owner_id = ${auth.user.id}
+      order by created_at desc
+    `;
+    return { cards };
   })
   .get('/api/connections', async ({ headers }) => {
     const auth = await requireUser(headers);
     if (!auth.user) return auth.response;
 
-    const { data, error } = await supabase
-      .from('user_connections')
-      .select('id, owner_id, label, provider, url, provider_account_id, created_at')
-      .eq('owner_id', auth.user.id)
-      .order('created_at', { ascending: true });
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-    return { connections: data as Connection[] };
+    const connections = await sql<Connection[]>`
+      select id, owner_id, label, provider, url, provider_account_id, created_at
+      from user_connections
+      where owner_id = ${auth.user.id}
+      order by created_at asc
+    `;
+    return { connections };
   })
   .post(
     '/api/connections',
@@ -637,23 +637,21 @@ const app = new Elysia()
         return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid URL.' }), { status: 400 });
       }
 
-      const { data, error } = await supabase
-        .from('user_connections')
-        .insert({
-          owner_id: auth.user.id,
-          label: body.label.trim(),
-          provider: body.provider.trim(),
-          url
-        })
-        .select('id, owner_id, label, provider, url, provider_account_id, created_at')
-        .single();
-      if (error) {
-        const message = error.message.includes('user_connections_url_check')
+      try {
+        const [connection] = await sql<Connection[]>`
+          insert into user_connections (owner_id, label, provider, url)
+          values (${auth.user.id}, ${body.label.trim()}, ${body.provider.trim()}, ${url})
+          returning id, owner_id, label, provider, url, provider_account_id, created_at
+        `;
+        return { connection };
+      } catch (error) {
+        const message = error instanceof Error && error.message.includes('user_connections_url_check')
           ? 'Database setup needs updating: allow mailto: in user_connections_url_check.'
-          : error.message;
+          : error instanceof Error
+            ? error.message
+            : 'Could not save connection.';
         return new Response(JSON.stringify({ error: message }), { status: 500 });
       }
-      return { connection: data as Connection };
     },
     { body: t.Object({ label: t.String({ minLength: 1 }), provider: t.String({ minLength: 1 }), url: t.String() }) }
   )
@@ -661,8 +659,10 @@ const app = new Elysia()
     const auth = await requireUser(headers);
     if (!auth.user) return auth.response;
 
-    const { error } = await supabase.from('user_connections').delete().eq('id', params.id).eq('owner_id', auth.user.id);
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    await sql`
+      delete from user_connections
+      where id = ${params.id} and owner_id = ${auth.user.id}
+    `;
     return { ok: true };
   })
   .post(
@@ -672,24 +672,24 @@ const app = new Elysia()
       if (!auth.user) return auth.response;
 
       const claimHash = await hashSecret(body.code);
-      const { data: card, error: loadError } = await supabase
-        .from('cards')
-        .select('id, owner_id')
-        .eq('claim_code_hash', claimHash)
-        .maybeSingle();
-      if (loadError || !card) return new Response(JSON.stringify({ error: 'Invalid card claim code.' }), { status: 400 });
+      const [card] = await sql<{ id: string; owner_id: string | null }[]>`
+        select id, owner_id
+        from cards
+        where claim_code_hash = ${claimHash}
+        limit 1
+      `;
+      if (!card) return new Response(JSON.stringify({ error: 'Invalid card claim code.' }), { status: 400 });
       if (card.owner_id && card.owner_id !== auth.user.id) {
         return new Response(JSON.stringify({ error: 'This card has already been claimed.' }), { status: 409 });
       }
 
-      const { data, error } = await supabase
-        .from('cards')
-        .update({ owner_id: auth.user.id, claimed_at: new Date().toISOString() })
-        .eq('id', card.id)
-        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at')
-        .single();
-      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-      return { card: data as Card };
+      const [claimedCard] = await sql<Card[]>`
+        update cards
+        set owner_id = ${auth.user.id}, claimed_at = ${new Date().toISOString()}
+        where id = ${card.id}
+        returning id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at
+      `;
+      return { card: claimedCard };
     },
     { body: t.Object({ code: t.String({ minLength: 16 }) }) }
   )
@@ -708,23 +708,20 @@ const app = new Elysia()
         return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid URL.' }), { status: 400 });
       }
 
-      const { data, error } = await supabase
-        .from('cards')
-        .update({
-          link_1_kind: link1.kind,
-          link_1_url: link1.url,
-          link_1_connection_id: link1.connectionId,
-          link_2_kind: link2.kind,
-          link_2_url: link2.url,
-          link_2_connection_id: link2.connectionId
-        })
-        .eq('id', params.id)
-        .eq('owner_id', auth.user.id)
-        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at')
-        .maybeSingle();
-      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-      if (!data) return new Response(JSON.stringify({ error: 'Card not found.' }), { status: 404 });
-      return { card: data as Card };
+      const [card] = await sql<Card[]>`
+        update cards
+        set
+          link_1_kind = ${link1.kind},
+          link_1_url = ${link1.url},
+          link_1_connection_id = ${link1.connectionId},
+          link_2_kind = ${link2.kind},
+          link_2_url = ${link2.url},
+          link_2_connection_id = ${link2.connectionId}
+        where id = ${params.id} and owner_id = ${auth.user.id}
+        returning id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claimed_at, created_at
+      `;
+      if (!card) return new Response(JSON.stringify({ error: 'Card not found.' }), { status: 404 });
+      return { card };
     },
     {
       body: t.Object({
@@ -741,14 +738,14 @@ const app = new Elysia()
     const auth = await requireAdmin(headers);
     if (!auth.user) return auth.response;
 
-      const { data, error } = await supabase
-        .from('cards')
-        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claim_code, claimed_at, created_at')
-      .order('created_at', { ascending: false });
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    const data = await sql<Card[]>`
+      select id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claim_code, claimed_at, created_at
+      from cards
+      order by created_at desc
+    `;
 
     const cards = await Promise.all(
-      ((data ?? []) as Card[]).map(async (card) => {
+      data.map(async (card) => {
         const claimUrl = card.claim_code ? `${env.appOrigin}/claim?card=${encodeURIComponent(card.claim_code)}` : null;
         return {
           ...card,
@@ -764,9 +761,8 @@ const app = new Elysia()
     const auth = await requireAdmin(headers);
     if (!auth.user) return auth.response;
 
-    const { data, error } = await supabase.from('cards').select('id');
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
-    return { nextId: nextCardId((data ?? []) as Pick<Card, 'id'>[]) };
+    const data = await sql<Pick<Card, 'id'>[]>`select id from cards`;
+    return { nextId: nextCardId(data) };
   })
   .post(
     '/api/admin/cards',
@@ -784,20 +780,11 @@ const app = new Elysia()
       } catch (error) {
         return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid URL.' }), { status: 400 });
       }
-      const { data, error } = await supabase
-        .from('cards')
-        .insert({
-          id: body.cardId,
-          claim_code: code,
-          claim_code_hash: await hashSecret(code),
-          link_1_kind: 'custom',
-          link_2_kind: 'custom',
-          link_1_url: defaultLink1,
-          link_2_url: defaultLink2
-        })
-        .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claim_code, claimed_at, created_at')
-        .single();
-      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+      const [data] = await sql<Card[]>`
+        insert into cards (id, claim_code, claim_code_hash, link_1_kind, link_2_kind, link_1_url, link_2_url)
+        values (${body.cardId}, ${code}, ${await hashSecret(code)}, 'custom', 'custom', ${defaultLink1}, ${defaultLink2})
+        returning id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id, claim_code, claimed_at, created_at
+      `;
 
       return {
         card: data,
@@ -814,7 +801,7 @@ const app = new Elysia()
     }
   )
   .get('/card_*', async ({ request }) => {
-    if (!supabaseConfigured) {
+    if (!databaseConfigured) {
       return new Response('Aurealize is not configured yet.', { status: 500 });
     }
 
@@ -825,12 +812,13 @@ const app = new Elysia()
     const slot = Number(rawSlot);
     if (![1, 2].includes(slot)) return new Response('Unknown Aurealize card link.', { status: 404 });
 
-    const { data: card, error } = await supabase
-      .from('cards')
-      .select('id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id')
-      .eq('id', cardId)
-      .maybeSingle();
-    if (error || !card) return new Response('Unknown Aurealize card.', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+    const [card] = await sql<Card[]>`
+      select id, owner_id, link_1_url, link_2_url, link_1_kind, link_2_kind, link_1_connection_id, link_2_connection_id
+      from cards
+      where id = ${cardId}
+      limit 1
+    `;
+    if (!card) return new Response('Unknown Aurealize card.', { status: 404, headers: { 'Content-Type': 'text/plain' } });
     if (!card.owner_id) {
       return new Response(`Card ${card.id} isnt claimed! Please claim it with the QR code`, {
         status: 404,
@@ -843,13 +831,13 @@ const app = new Elysia()
     let destination = slot === 1 ? card.link_1_url : card.link_2_url;
 
     if (kind === 'connection' && connectionId) {
-      const { data: connection, error: connectionError } = await supabase
-        .from('user_connections')
-        .select('url')
-        .eq('id', connectionId)
-        .eq('owner_id', card.owner_id)
-        .maybeSingle();
-      if (connectionError || !connection) return redirect(`${env.appOrigin}/`);
+      const [connection] = await sql<{ url: string }[]>`
+        select url
+        from user_connections
+        where id = ${connectionId} and owner_id = ${card.owner_id}
+        limit 1
+      `;
+      if (!connection) return redirect(`${env.appOrigin}/`);
       destination = connection.url;
       return redirect(destination);
     }
