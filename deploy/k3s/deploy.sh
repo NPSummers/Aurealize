@@ -18,8 +18,8 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-docker build -t "$IMAGE_NAME" .
-docker save "$IMAGE_NAME" -o "$IMAGE_ARCHIVE"
+podman build -f Containerfile -t "$IMAGE_NAME" .
+podman save --format oci-archive -o "$IMAGE_ARCHIVE" "$IMAGE_NAME"
 sudo k3s ctr images import "$IMAGE_ARCHIVE"
 
 sudo k3s kubectl apply -f deploy/k3s/namespace.yaml

@@ -1,6 +1,6 @@
 # k3s deployment
 
-The application runs as one container. Elysia listens on container port `3000`, the Kubernetes Service exposes it on port `80`, and Traefik routes `aurealize.aureal.dev` over its plain HTTP `web` entrypoint. Cloudflare Tunnel handles the public HTTPS connection.
+The application runs as one Podman-built container. Elysia listens on container port `3000`, the Kubernetes Service exposes it on port `80`, and Traefik routes `aurealize.aureal.dev` over its plain HTTP `web` entrypoint. Cloudflare Tunnel handles the public HTTPS connection.
 
 Keep the production database, Resend, sender, and administrator values in the project-root `.env`. The file is turned into the `aurealize-cards-env` Kubernetes Secret during deployment and is never copied into the image.
 
@@ -12,7 +12,7 @@ sh deploy/k3s/deploy.sh
 
 The script:
 
-1. Builds `aurealize-cards:latest`.
+1. Builds `aurealize-cards:latest` with `podman build`.
 2. Imports it into the local k3s containerd image store.
 3. Creates or updates the Kubernetes Secret from `.env`.
 4. Applies the manifests and waits for rollout.
