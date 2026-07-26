@@ -345,6 +345,21 @@ async function sendVerificationEmail(email: string, verificationUrl: string) {
 const app = new Elysia()
   .use(cors({ origin: env.appOrigin, credentials: true }))
   .use(staticPlugin({ assets: 'dist', prefix: '/' }))
+  .get('/api/health/live', () => ({ status: 'ok' }))
+  .get('/api/health/ready', async ({ set }) => {
+    if (!databaseConfigured) {
+      set.status = 503;
+      return { status: 'not_ready' };
+    }
+
+    try {
+      await sql`select 1`;
+      return { status: 'ok' };
+    } catch {
+      set.status = 503;
+      return { status: 'not_ready' };
+    }
+  })
   .get('/api/auth/session', async ({ headers }) => {
     const user = await currentUser(headers);
     return { user, isAdmin: Boolean(user && env.adminEmail && user.email.toLowerCase() === env.adminEmail) };

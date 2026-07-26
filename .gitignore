@@ -20,6 +20,9 @@ dist/
 # Generated card assets
 generated-cards/
 
+# Temporary server compile output
+.server-check/
+
 # OS/editor noise
 .DS_Store
 Thumbs.db

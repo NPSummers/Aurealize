@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+IMAGE_NAME=${IMAGE_NAME:-aurealize-cards:latest}
+IMAGE_ARCHIVE=$(mktemp "${TMPDIR:-/tmp}/aurealize-cards.XXXXXX.tar")
+
+cleanup() {
+  rm -f "$IMAGE_ARCHIVE"
+}
+trap cleanup EXIT
+
+cd "$PROJECT_ROOT"
+
+if [ ! -f .env ]; then
+  echo "Missing $PROJECT_ROOT/.env"
+  exit 1
+fi
+
+docker build -t "$IMAGE_NAME" .
+docker save "$IMAGE_NAME" -o "$IMAGE_ARCHIVE"
+sudo k3s ctr images import "$IMAGE_ARCHIVE"
+
+sudo k3s kubectl apply -f deploy/k3s/namespace.yaml
+sudo k3s kubectl -n aurealize create secret generic aurealize-cards-env \
+  --from-env-file=.env \
+  --dry-run=client \
+  -o yaml |
+  sudo k3s kubectl apply -f -
+
+sudo k3s kubectl apply -k deploy/k3s
+sudo k3s kubectl -n aurealize rollout restart deployment/aurealize-cards
+sudo k3s kubectl -n aurealize rollout status deployment/aurealize-cards
+
+echo "Aurealize is deployed for https://aurealize.aureal.dev"
