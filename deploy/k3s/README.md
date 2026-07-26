@@ -12,12 +12,14 @@ sh deploy/k3s/deploy.sh
 
 The script:
 
-1. Builds `aurealize-cards:latest` with `podman build`.
+1. Builds `localhost/aurealize-cards:latest` with `podman build`.
 2. Imports it into the local k3s containerd image store.
 3. Creates or updates the Kubernetes Secret from `.env`.
 4. Applies the manifests and waits for rollout.
 
 The single-replica Deployment uses the `Recreate` strategy. The old process closes its HTTP listener and Postgres pool on shutdown before the replacement starts.
+
+The Deployment uses `imagePullPolicy: Never` because the Podman image is imported directly into k3s containerd instead of being pulled from a registry.
 
 For Cloudflare Tunnel, send `aurealize.aureal.dev` to Traefik on HTTP port `80`. If `cloudflared` runs inside the cluster, the service target is typically:
 

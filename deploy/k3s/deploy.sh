@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-IMAGE_NAME=${IMAGE_NAME:-aurealize-cards:latest}
+IMAGE_NAME=${IMAGE_NAME:-localhost/aurealize-cards:latest}
 IMAGE_ARCHIVE=$(mktemp "${TMPDIR:-/tmp}/aurealize-cards.XXXXXX.tar")
 
 cleanup() {
@@ -21,6 +21,12 @@ fi
 podman build -f Containerfile -t "$IMAGE_NAME" .
 podman save --format oci-archive -o "$IMAGE_ARCHIVE" "$IMAGE_NAME"
 sudo k3s ctr images import "$IMAGE_ARCHIVE"
+
+if ! sudo k3s ctr images list -q | grep -Fx "$IMAGE_NAME" >/dev/null; then
+  echo "k3s did not import the expected image: $IMAGE_NAME"
+  sudo k3s ctr images list | grep aurealize || true
+  exit 1
+fi
 
 sudo k3s kubectl apply -f deploy/k3s/namespace.yaml
 sudo k3s kubectl -n aurealize create secret generic aurealize-cards-env \
