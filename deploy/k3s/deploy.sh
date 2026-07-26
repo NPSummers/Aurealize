@@ -31,6 +31,13 @@ sudo k3s kubectl -n aurealize create secret generic aurealize-cards-env \
 
 sudo k3s kubectl apply -k deploy/k3s
 sudo k3s kubectl -n aurealize rollout restart deployment/aurealize-cards
-sudo k3s kubectl -n aurealize rollout status deployment/aurealize-cards
+
+if ! sudo k3s kubectl -n aurealize rollout status deployment/aurealize-cards --timeout=180s; then
+  echo "Rollout did not finish. Current pods:"
+  sudo k3s kubectl -n aurealize get pods -o wide
+  echo "Recent namespace events:"
+  sudo k3s kubectl -n aurealize get events --sort-by=.lastTimestamp
+  exit 1
+fi
 
 echo "Aurealize is deployed for https://aurealize.aureal.dev"

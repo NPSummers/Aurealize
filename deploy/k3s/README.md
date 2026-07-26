@@ -17,6 +17,8 @@ The script:
 3. Creates or updates the Kubernetes Secret from `.env`.
 4. Applies the manifests and waits for rollout.
 
+The single-replica Deployment uses the `Recreate` strategy. The old process closes its HTTP listener and Postgres pool on shutdown before the replacement starts.
+
 For Cloudflare Tunnel, send `aurealize.aureal.dev` to Traefik on HTTP port `80`. If `cloudflared` runs inside the cluster, the service target is typically:
 
 ```text

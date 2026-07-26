@@ -867,3 +867,22 @@ const app = new Elysia()
   .listen(env.port);
 
 console.log(`Aurealize server running on http://localhost:${app.server?.port}`);
+
+let shuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  console.log(`Received ${signal}; stopping Aurealize server.`);
+  app.stop(true);
+
+  try {
+    await sql.end({ timeout: 5 });
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));

@@ -4,6 +4,10 @@ metadata:
   name: aurealize-cards
 spec:
   replicas: 1
+  progressDeadlineSeconds: 180
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app.kubernetes.io/name: aurealize-cards
@@ -12,6 +16,7 @@ spec:
       labels:
         app.kubernetes.io/name: aurealize-cards
     spec:
+      terminationGracePeriodSeconds: 15
       securityContext:
         runAsNonRoot: true
         seccompProfile:
