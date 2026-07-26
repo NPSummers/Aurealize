@@ -21,7 +21,7 @@ RUN bun install --frozen-lockfile --production
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/server ./src/server
 
-USER bun
+USER 1000:1000
 
 EXPOSE 3000
 
